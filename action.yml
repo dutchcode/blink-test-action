@@ -4,11 +4,8 @@
 # integrations/github-action/ — to publish, copy this directory to the root of
 # a public repo (e.g. dutchcode/blink-test-action) and tag a release. See README.md.
 name: 'Blinkof.ai Blink Test'
-description: >-
-  Run a Blinkof.ai blink test on your deployed app: a deep QA scan that acts like a
-  real user (signup, hostile input, checkout, GDPR erasure, mobile layout) and fails
-  the build on critical findings. Every finding comes with a paste-ready fix prompt
-  for Cursor, Claude Code, Lovable, Bolt, or v0.
+# Marketplace requires description < 125 chars; the full pitch lives in README.md.
+description: 'Deep QA scan of your deployed app that acts like a real user, with paste-ready fix prompts. Fails on critical findings.'
 author: 'Dutchcode B.V.'
 branding:
   icon: 'eye'
