@@ -3,7 +3,7 @@
 # Marketplace-ready composite action. Lives in the product repo under
 # integrations/github-action/ — to publish, copy this directory to the root of
 # a public repo (e.g. dutchcode/blink-test-action) and tag a release. See README.md.
-name: 'Blink Test — Blinkof.ai'
+name: 'Blinkof.ai Blink Test'
 description: >-
   Run a Blinkof.ai blink test on your deployed app: a deep QA scan that acts like a
   real user (signup, hostile input, checkout, GDPR erasure, mobile layout) and fails
