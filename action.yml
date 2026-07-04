@@ -1,0 +1,145 @@
+# Blink Test — Blinkof.ai deep QA scan on every deploy.
+#
+# Marketplace-ready composite action. Lives in the product repo under
+# integrations/github-action/ — to publish, copy this directory to the root of
+# a public repo (e.g. dutchcode/blink-test-action) and tag a release. See README.md.
+name: 'Blink Test — Blinkof.ai'
+description: >-
+  Run a Blinkof.ai blink test on your deployed app: a deep QA scan that acts like a
+  real user (signup, hostile input, checkout, GDPR erasure, mobile layout) and fails
+  the build on critical findings. Every finding comes with a paste-ready fix prompt
+  for Cursor, Claude Code, Lovable, Bolt, or v0.
+author: 'Dutchcode B.V.'
+branding:
+  icon: 'eye'
+  color: 'green'
+
+inputs:
+  url:
+    description: 'The deployed app URL to scan, e.g. https://yourapp.com'
+    required: true
+  api-token:
+    description: 'Blinkof.ai API token (create one in the dashboard under "Developers - API tokens for CI"; store it as a repo secret). The token must belong to an account that has verified ownership of the scanned host.'
+    required: true
+  fail-on:
+    description: 'Fail the step when findings at or above this severity exist: "critical", "high", or "none" (never fail).'
+    required: false
+    default: 'critical'
+  wait:
+    description: 'Wait for the scan to finish ("true") or just queue it and exit ("false").'
+    required: false
+    default: 'true'
+  timeout-minutes:
+    description: 'How long to wait for the scan to complete before giving up.'
+    required: false
+    default: '15'
+
+outputs:
+  scan-id:
+    description: 'The scan id.'
+    value: ${{ steps.scan.outputs.scan_id }}
+  score:
+    description: 'Health score (0-100), empty if wait=false.'
+    value: ${{ steps.scan.outputs.score }}
+  grade:
+    description: 'Letter grade (A++..F), empty if wait=false.'
+    value: ${{ steps.scan.outputs.grade }}
+  report-url:
+    description: 'Human-readable report URL.'
+    value: ${{ steps.scan.outputs.report_url }}
+
+runs:
+  using: 'composite'
+  steps:
+    - id: scan
+      shell: bash
+      env:
+        BLINKOF_URL: ${{ inputs.url }}
+        BLINKOF_TOKEN: ${{ inputs.api-token }}
+        FAIL_ON: ${{ inputs.fail-on }}
+        WAIT: ${{ inputs.wait }}
+        TIMEOUT_MINUTES: ${{ inputs.timeout-minutes }}
+      run: |
+        set -euo pipefail
+
+        queue_response=$(curl -sS -X POST https://blinkof.ai/api/v1/scans \
+          -H "Authorization: Bearer ${BLINKOF_TOKEN}" \
+          -H "Content-Type: application/json" \
+          -d "{\"url\": \"${BLINKOF_URL}\"}")
+
+        error=$(echo "$queue_response" | jq -r '.error // empty')
+        if [ -n "$error" ]; then
+          echo "::error title=Blink test::${error}"
+          exit 1
+        fi
+
+        scan_id=$(echo "$queue_response" | jq -r '.id')
+        result_url=$(echo "$queue_response" | jq -r '.result_url')
+        report_url=$(echo "$queue_response" | jq -r '.report_url')
+        echo "scan_id=${scan_id}" >> "$GITHUB_OUTPUT"
+        echo "report_url=${report_url}" >> "$GITHUB_OUTPUT"
+        echo "Blink test queued: ${scan_id}"
+        echo "Report: ${report_url}"
+
+        if [ "$WAIT" != "true" ]; then
+          echo "score=" >> "$GITHUB_OUTPUT"
+          echo "grade=" >> "$GITHUB_OUTPUT"
+          echo "wait=false — not polling for results."
+          exit 0
+        fi
+
+        deadline=$(( $(date +%s) + TIMEOUT_MINUTES * 60 ))
+        while true; do
+          if [ "$(date +%s)" -gt "$deadline" ]; then
+            echo "::error title=Blink test::Timed out after ${TIMEOUT_MINUTES} minutes. Check ${report_url}"
+            exit 1
+          fi
+          sleep 20
+          result=$(curl -sS "$result_url" -H "Authorization: Bearer ${BLINKOF_TOKEN}")
+          status=$(echo "$result" | jq -r '.status // "unknown"')
+          echo "status: ${status}"
+          if [ "$status" = "complete" ]; then
+            break
+          fi
+          if [ "$status" = "error" ] || [ "$status" = "failed" ]; then
+            echo "::error title=Blink test::Scan ended with status '${status}'. Check ${report_url}"
+            exit 1
+          fi
+        done
+
+        score=$(echo "$result" | jq -r '.score // empty')
+        grade=$(echo "$result" | jq -r '.grade // empty')
+        critical=$(echo "$result" | jq -r '.counts.critical // 0')
+        high=$(echo "$result" | jq -r '.counts.high // 0')
+        medium=$(echo "$result" | jq -r '.counts.medium // 0')
+        echo "score=${score}" >> "$GITHUB_OUTPUT"
+        echo "grade=${grade}" >> "$GITHUB_OUTPUT"
+
+        echo "## Blink test: ${BLINKOF_URL}" >> "$GITHUB_STEP_SUMMARY"
+        echo "" >> "$GITHUB_STEP_SUMMARY"
+        echo "**Score:** ${score} (grade ${grade})" >> "$GITHUB_STEP_SUMMARY"
+        echo "**Findings:** ${critical} critical · ${high} high · ${medium} medium" >> "$GITHUB_STEP_SUMMARY"
+        echo "" >> "$GITHUB_STEP_SUMMARY"
+        echo "[Full report with paste-ready fix prompts](${report_url})" >> "$GITHUB_STEP_SUMMARY"
+
+        case "$FAIL_ON" in
+          critical)
+            if [ "$critical" -gt 0 ]; then
+              echo "::error title=Blink test::${critical} critical finding(s). ${report_url}"
+              exit 1
+            fi
+            ;;
+          high)
+            if [ "$critical" -gt 0 ] || [ "$high" -gt 0 ]; then
+              echo "::error title=Blink test::${critical} critical + ${high} high finding(s). ${report_url}"
+              exit 1
+            fi
+            ;;
+          none)
+            ;;
+          *)
+            echo "::warning title=Blink test::Unknown fail-on value '${FAIL_ON}' — treating as 'none'."
+            ;;
+        esac
+
+        echo "Blink test passed: score ${score} (grade ${grade})."
